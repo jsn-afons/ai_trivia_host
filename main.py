@@ -1,7 +1,9 @@
+import uuid
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.checkpoint.memory import MemorySaver
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,8 @@ def assistant(state: TriviaState):
 
 
 #--------------- Graph Building -------------------#
+memory = MemorySaver()
+
 builder = StateGraph(TriviaState)
 
 builder.add_node("assistant", assistant)
@@ -64,11 +68,29 @@ builder.add_edge(START, "assistant")
 builder.add_conditional_edges("assistant", tools_condition)
 builder.add_edge("tools","assistant")
 
-graph = builder.compile()
+graph = builder.compile(checkpointer=memory)
 
 #--------------- Game Play -----------------------#
+def get_config(thread_id: str = uuid.uuid4()) -> dict:
+    
+    return {'configurable': {'thread_id': thread_id}}
 
-def call_llm():
+def call_llm(config: dict = get_config()):
+    
     user_message = input("What is your answer?")
-    response = graph.invoke({"messages": [HumanMessage(user_message)]})
+    response = graph.invoke({"messages": [HumanMessage(user_message)]}, config)
     return print(response["messages"][-1].content)
+
+print('WELCOME TO THE TRIVIA GAME')
+first_question = graph.invoke({'messages': [HumanMessage("Begin the game")]}, get_config())
+print(first_question['messages'][-1].content)
+
+while True:
+    thread_id = str(uuid.uuid4())
+    call_llm(get_config(thread_id))
+    current_state = graph.get_state(get_config()).values
+    all_messages = current_state.get("messages", [])
+
+    if any(msg for msg in all_messages if msg.content.strip == "end"):
+        break
+
